@@ -87,6 +87,15 @@ impl LmdFile {
         s
     }
 
+    /// Copy with every space in a layer name replaced by `_` (group names are untouched).
+    pub fn with_underscores(&self) -> LmdFile {
+        let mut f = self.clone();
+        for l in f.groups.iter_mut().flat_map(|g| g.layers.iter_mut()) {
+            l.name = l.name.split_whitespace().collect::<Vec<_>>().join("_");
+        }
+        f
+    }
+
     /// Replace the group of the same name (case-insensitive) or append it.
     pub fn merge_group(&mut self, group: LmdGroup) {
         match self.groups.iter_mut().find(|g| g.name.eq_ignore_ascii_case(&group.name)) {
@@ -185,6 +194,57 @@ pub fn import(host: &mut dyn LayerHost, file: &LmdFile, groups: &[usize], existi
     rep
 }
 
+
+/// A layer group to create in the drawing for one LMD group.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupPlan {
+    pub name: String,
+    pub layers: Vec<String>,
+    /// Members the host's command line cannot take (their name contains a space).
+    pub skipped: Vec<String>,
+}
+
+/// One layer group per ticked LMD group. `format` holds `{name}`, e.g. `[{name}]`.
+/// Spaces in the resulting group name become `_` (the host command line splits on spaces).
+/// A layer belongs to every group it is listed in, even when its creation was de-duplicated.
+pub fn group_plans(file: &LmdFile, groups: &[usize], format: &str) -> Vec<GroupPlan> {
+    groups
+        .iter()
+        .filter_map(|&gi| file.groups.get(gi))
+        .filter(|g| !g.name.is_empty())
+        .map(|g| {
+            let name: String = format
+                .replace("{name}", &g.name)
+                .trim()
+                .chars()
+                .map(|c| if c.is_whitespace() { '_' } else { c })
+                .collect();
+            let (mut layers, mut skipped) = (Vec::<String>::new(), Vec::new());
+            for l in &g.layers {
+                if l.name.contains(char::is_whitespace) {
+                    skipped.push(l.name.clone());
+                } else if !layers.iter().any(|x| x.eq_ignore_ascii_case(&l.name)) {
+                    layers.push(l.name.clone());
+                }
+            }
+            GroupPlan { name, layers, skipped }
+        })
+        .collect()
+}
+
+/// Host commands for one group. `NEW` is ignored by the host when the group exists, so
+/// every chunk is also sent with `ADD` (which never duplicates): re-importing refreshes
+/// the membership of an existing group.
+pub fn group_commands(p: &GroupPlan) -> Vec<String> {
+    let chunks: Vec<&[String]> = p.layers.chunks(40).collect();
+    let first = chunks.first().map(|c| c.join(" ")).unwrap_or_default();
+    let mut cmds = vec![format!("LAYERGROUP NEW {} {}", p.name, first).trim_end().to_string()];
+    for c in chunks {
+        cmds.push(format!("LAYERGROUP ADD {} {}", p.name, c.join(" ")));
+    }
+    cmds
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -238,6 +298,37 @@ pub(crate) mod tests {
         assert_eq!(g.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["UTIL_GAS", "ROAD"]);
         assert_eq!(g.layers[1].color, 7);
         assert_eq!(LmdFile::group_from_layers("G", &layers, "util*").layers.len(), 1);
+    }
+
+    #[test]
+    fn underscores_make_every_layer_groupable() {
+        let (f, _) = parse(SAMPLE);
+        let u = f.with_underscores();
+        assert_eq!(u.groups[1].layers[0].name, "ROAD_CL");
+        assert_eq!(u.groups[1].name, "CIVIL-ROADS");
+        let plans = group_plans(&u, &[1], "{name}");
+        assert_eq!(plans[0].layers, ["ROAD_CL"]);
+        assert!(plans[0].skipped.is_empty());
+        assert_eq!(f.groups[1].layers[0].name, "ROAD CL"); // original untouched
+    }
+
+    #[test]
+    fn group_plans_and_commands() {
+        let (f, _) = parse(SAMPLE);
+        let plans = group_plans(&f, &[0, 1, 2], "[{name}]");
+        assert_eq!(plans.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["[TT-STANDARD]", "[CIVIL-ROADS]", "[SVC]"]);
+        assert_eq!(plans[0].layers, ["D25", "DIM"]);
+        // "ROAD CL" has a space: reported, not sent
+        assert_eq!(plans[1].skipped, ["ROAD CL"]);
+        assert!(plans[1].layers.is_empty());
+        // DIM is in TT-STANDARD *and* SVC: it belongs to both groups
+        assert_eq!(plans[2].layers, ["DIM", "DRAIN-LEFT"]);
+        assert_eq!(group_commands(&plans[0]), ["LAYERGROUP NEW [TT-STANDARD] D25 DIM", "LAYERGROUP ADD [TT-STANDARD] D25 DIM"]);
+        assert_eq!(group_commands(&plans[1]), ["LAYERGROUP NEW [CIVIL-ROADS]"]);
+        let spaced = group_plans(&f, &[0], "Grp {name} x");
+        assert_eq!(spaced[0].name, "Grp_TT-STANDARD_x");
+        let big = GroupPlan { name: "G".into(), layers: (0..85).map(|i| format!("L{i}")).collect(), skipped: vec![] };
+        assert_eq!(group_commands(&big).len(), 4); // NEW + 3 ADD chunks (40+40+5)
     }
 
     struct Mock {

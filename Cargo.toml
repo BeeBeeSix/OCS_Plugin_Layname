@@ -1,6 +1,6 @@
 [package]
 name = "opencad-layname-plugin"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Layer Names add-on for Open CAD Studio — import/export LMD layer maps, bulk rename layers, create and exchange layer filters."
 license = "GPL-3.0-only"

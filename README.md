@@ -1,4 +1,4 @@
-# Layer Names (`com.beebeesix.ocs-plugin-layname`)
+# Layer Names (`opencad.layname`)
 
 External add-on for [Open CAD Studio](https://github.com/HakanSeven12/OpenCADStudio): layer
 housekeeping in one window with three tabs. Ribbon tab **Layer Names**; commands start with `LN_`.
@@ -21,6 +21,13 @@ NAME ,color, Linetype , Description        (<null> = no description)
 
 * **Import**: pick the file, tick the groups, choose what happens to layers that already exist
   (*skip* or *update colour/linetype/description*). One undo step.
+* **Layer groups**: each ticked LMD group can also become a layer group in the Layer Manager. The
+  name comes from a format (default `[{name}]` → `[CIVIL-ROADS]`; use `{name}` for no brackets).
+  Re-importing refreshes the members of a group that already exists. The host only offers the
+  `LAYERGROUP` command to plugins, and it splits on spaces: spaces in a group name become `_`.
+* **Replace spaces with `_`** (default on): layer names such as `ROAD CL` are imported as `ROAD_CL`, so
+  they can join their group. With it off, such layers are created with their original name but are not
+  added to their group (listed on the command line).
 * A name that appears in several ticked groups is created once (first wins); layer names are
   case-insensitive. The command line lists the repeats.
 * A linetype the drawing doesn't have (and the CAD can't load by itself) is not an error: the layer
@@ -49,9 +56,8 @@ Properties: Name, Description, Color, Linetype, On, Frozen, Locked, Plot, Xref.
 command, which supports `Name == pattern` (one), `Color ==`, `Linetype ==` and the On/Frozen/
 Locked/Plot flags, AND-ed. OR is built with nested filters (`Name__1`, `Name__2` inside `Name`).
 `!=`, `NOT Name`, Description, Xref and `< >` cannot be created — such a filter is reported and
-skipped, never created broader than asked. 
-
-That includes `Name != *|*` ("XREF-off"); make that one using `Name = ~*|*` ("XREF-off").
+skipped, never created broader than asked. That includes `Name != *|*` ("XREF-off"); make that one
+once in the Layer Filter dialog.
 
 ## Build
 

@@ -19,7 +19,15 @@ use crate::rename::{self, RenameOp};
 
 /// Work chosen in the dialog, done by `LN_APPLY`.
 pub enum Job {
-    Import { file: LmdFile, groups: Vec<usize>, existing: Existing },
+    Import {
+        file: LmdFile,
+        groups: Vec<usize>,
+        existing: Existing,
+        /// `Some(format)` = also create a layer group per LMD group (`{name}` in the format).
+        group_format: Option<String>,
+        /// Replace spaces in layer names with `_` before importing.
+        underscores: bool,
+    },
     Export { path: String, group: String, pattern: String, append: bool },
     Rename { op: RenameOp, scope: String },
     FilterCreate(Vec<FilterDef>),
@@ -168,9 +176,20 @@ fn apply(host: &mut dyn HostApi, job: Job) {
     match job {
         Job::Problem(msg) => host.push_error(&format!("Layer Names: {msg}")),
 
-        Job::Import { file, groups, existing } => {
+        Job::Import { file, groups, existing, group_format, underscores } => {
+            let file = if underscores { file.with_underscores() } else { file };
             host.begin_undo_group("LN_IMPORT");
             let rep = lmd::import(&mut Adapter(host), &file, &groups, existing);
+            let plans = group_format.map(|f| lmd::group_plans(&file, &groups, &f)).unwrap_or_default();
+            let mut made = 0;
+            let mut refused = Vec::new();
+            for p in &plans {
+                if lmd::group_commands(p).iter().all(|c| host.execute_command(c)) {
+                    made += 1;
+                } else {
+                    refused.push(p.name.clone());
+                }
+            }
             host.end_undo_group();
             host.push_info(&format!(
                 "LN_IMPORT: {} layer(s) created, {} updated, {} skipped (already exist).",
@@ -182,6 +201,23 @@ fn apply(host: &mut dyn HostApi, job: Job) {
                      Load the linetypes (LINETYPE) and import again with \"Update existing layers\".",
                     rep.linetype_fallback.len(), list(&rep.linetype_fallback, 8)
                 ));
+            }
+            if !plans.is_empty() {
+                host.push_output(&format!("  {made} layer group(s) created or updated: {}", list(&plans.iter().map(|p| p.name.clone()).collect::<Vec<_>>(), 6)));
+                let skipped: Vec<String> = plans.iter().flat_map(|p| p.skipped.iter().map(move |l| format!("{} [{}]", l, p.name))).collect();
+                if !skipped.is_empty() {
+                    host.push_output(&format!(
+                        "  {} layer(s) were not put in their group — a name with a space can't go through the command line: {}. \
+                         Add them in the Layer Manager.",
+                        skipped.len(), list(&skipped, 8)
+                    ));
+                }
+                if plans.iter().any(|p| p.name.contains('_')) {
+                    host.push_output("  Spaces in group names were replaced with '_'.");
+                }
+                if !refused.is_empty() {
+                    host.push_error(&format!("  the host did not accept the group command for: {}", list(&refused, 6)));
+                }
             }
             if !rep.duplicates_in_file.is_empty() {
                 host.push_output(&format!(

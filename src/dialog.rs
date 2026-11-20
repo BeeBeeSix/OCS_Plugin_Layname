@@ -180,6 +180,17 @@ impl LaynameDialog {
             c.push(info(&self.lmd_note));
         }
         c.push(choice("imp_existing", "Layers already in the drawing", &EXISTING_MODES, choice_of(v, "imp_existing")));
+        c.push(DialogControl::Checkbox {
+            id: "imp_nospace".into(),
+            label: "Replace spaces in layer names with _ (so every layer can join its group)".into(),
+            default: bool_of(v, "imp_nospace", true),
+        });
+        c.push(DialogControl::Checkbox {
+            id: "imp_mkgroups".into(),
+            label: "Also create a layer group for each ticked LMD group".into(),
+            default: bool_of(v, "imp_mkgroups", true),
+        });
+        c.push(text("imp_gfmt", "Group name ({name} = the LMD group name)", text_of(v, "imp_gfmt", "[{name}]")));
         c.push(info(
             "A layer whose linetype is not available in the drawing is still created, with Continuous, and listed in the \
              command line. A name repeated in several ticked groups is created once (the first one wins).",
@@ -376,7 +387,16 @@ impl LaynameDialog {
             return Job::Problem("no group is ticked.".into());
         }
         let existing = if choice_of(&self.vals, "imp_existing") == 1 { Existing::Update } else { Existing::Skip };
-        Job::Import { file: file.clone(), groups, existing }
+        let group_format = if bool_of(&self.vals, "imp_mkgroups", true) {
+            let f = text_of(&self.vals, "imp_gfmt", "[{name}]");
+            if !f.contains("{name}") {
+                return Job::Problem("the group name must contain {name}.".into());
+            }
+            Some(f)
+        } else {
+            None
+        };
+        Job::Import { file: file.clone(), groups, existing, group_format, underscores: bool_of(&self.vals, "imp_nospace", true) }
     }
 
     fn filter_job(&mut self) -> Job {
@@ -585,7 +605,9 @@ mod tests {
         ])));
         assert!(matches!(step, CommandStep::Dispatch(_)));
         match take_job_for_test() {
-            Some(Job::Import { groups, existing, .. }) => {
+            Some(Job::Import { groups, existing, group_format, underscores, .. }) => {
+                assert!(underscores); // on by default
+                assert_eq!(group_format.as_deref(), Some("[{name}]")); // groups on by default
                 assert_eq!(groups, vec![1]);
                 assert_eq!(existing, Existing::Update);
             }
