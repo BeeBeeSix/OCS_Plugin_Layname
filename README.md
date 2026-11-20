@@ -1,4 +1,4 @@
-# Layer Names (`opencad.layname`)
+# Layer Names (`com.beebeesix.ocs-plugin-layname`)
 
 External add-on for [Open CAD Studio](https://github.com/HakanSeven12/OpenCADStudio): layer
 housekeeping in one window with three tabs. Ribbon tab **Layer Names**; commands start with `LN_`.

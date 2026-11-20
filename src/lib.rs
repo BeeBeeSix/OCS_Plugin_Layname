@@ -22,7 +22,7 @@ mod ribbon;
 pub mod wildcard;
 
 /// Reverse-DNS plugin id; also the folder name under `plugins/`.
-pub const PLUGIN_ID: &str = "opencad.layname";
+pub const PLUGIN_ID: &str = "com.beebeesix.ocs-plugin-layname";
 
 // Keep in sync with plugin.toml (the version comes from Cargo.toml).
 static MANIFEST: PluginManifest = PluginManifest {
