@@ -17,13 +17,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            lib: libopencad_raster_plugin.so
+            lib: libopencad_plugin_layname.so
             asset: com.beebeesix.ocs-plugin-layname-linux-x86_64.so
           - os: windows-latest
-            lib: opencad_raster_plugin.dll
+            lib: opencad_plugin_layname.dll
             asset: com.beebeesix.ocs-plugin-layname-windows-x86_64.dll
           - os: macos-latest
-            lib: libopencad_raster_plugin.dylib
+            lib: libopencad_plugin_layname.dylib
             asset: com.beebeesix.ocs-plugin-layname-macos-aarch64.dylib
     runs-on: ${{ matrix.os }}
     steps:
