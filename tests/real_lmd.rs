@@ -1,5 +1,5 @@
 //! Runs against a real LMD file when one is present (skipped otherwise).
-use opencad_layname_plugin::lmd;
+use opencad_plugin_layname::lmd;
 
 #[test]
 fn real_file_roundtrip() {
