@@ -10,7 +10,7 @@ This is `CHANGELOG.md`  which the GitHub release notes are taken from.
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-11-20
+## [0.1.1] - 2026-11-21
 First version.
 ### Added
 * IMPORT / EXPORT: read and write LMD layer maps with `[Group]` sections; choose groups, skip or
@@ -18,3 +18,5 @@ First version.
 * RENAME: add/replace prefix, add/replace suffix, replace string; wildcard scope, preview with
   collision and illegal-name checks; chains and swaps handled.
 * FILTER: quick layer filters, CSV export/import (`LAYERFILTER` command based, see README for limits).
+
+Sample Folder: layer LMD and Filter CSV file samples
