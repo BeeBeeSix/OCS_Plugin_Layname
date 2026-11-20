@@ -9,6 +9,8 @@ This is `CHANGELOG.md`  which the GitHub release notes are taken from.
 `scripts/release.ps1` moves the entries under **[Unreleased]** into the new version when a release is made.
 
 ## [Unreleased]
+
+## [0.1.2] - 2026-11-21
 ### Edit
 write Layer Groups (Optional) form the LMD layers within `[Group]`
 
