@@ -1,15 +1,15 @@
 [plugin]
 id = "opencad.layname"
 name = "Layer Names"
-version = "0.1.2"
+version = "0.2.0"
 description = "Layer maps (LMD import/export), bulk layer rename (prefix, suffix, string) and layer filters (quick create, CSV export/import)."
-author = "Macchecaspita"
+author = "BeeBeeSix"
 license = "GPL-3.0-only"
 repository = "BeeBeeSix/OCS_Plugin_Layname"
 
 [opencad]
 # Must match API_VERSION exported by the linked ocs_plugin_api.
-api_version = 23
+api_version = 28
 ribbon_order = 61
 command_prefixes = ["LN_"]
 xdata_apps = []

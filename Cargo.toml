@@ -1,6 +1,6 @@
 [package]
 name = "opencad-plugin-layname"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 description = "Layer Names add-on for Open CAD Studio — import/export LMD layer maps, bulk rename layers, create and exchange layer filters."
 license = "GPL-3.0-only"
@@ -12,8 +12,8 @@ repository = "https://github.com/BeeBeeSix/OCS_Plugin_Layname"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# Same pin as OCS_Plugin_RasterTools: v2026.46 release tag commit (Plugin API 23).
-ocs_plugin_api = { git = "https://github.com/HakanSeven12/OpenCADStudio", rev = "8b4d27046040b27eb07d3faed7b7472bd7bdaea9", features = ["host"] }
+# Same pin as OCS_Plugin_RasterTools: v2026.47 release tag commit (Plugin API 28).
+ocs_plugin_api = { git = "https://github.com/HakanSeven12/OpenCADStudio", rev = "8e5f39f6ee0468a7e29260d57b5390d7d01207e8", features = ["host"] }
 
 [profile.release]
 lto = "thin"
