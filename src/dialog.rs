@@ -12,6 +12,7 @@ use ocs_plugin_api::dialog::{
 use ocs_plugin_api::host::{CommandStep, InteractiveCommand};
 
 use crate::commands::{set_job, Job};
+use crate::legend::{Params, Request, ScaleSource};
 use crate::filters::{self, FilterDef};
 use crate::host::LayerInfo;
 use crate::lmd::{self, Existing, LmdFile};
@@ -22,8 +23,19 @@ pub enum Tab {
     Import,
     Rename,
     Filter,
+    Legend,
 }
 
+const LEGEND_TYPES: [&str; 2] = [
+    "Layer legend (one line per layer; pick the LOWER-LEFT point)",
+    "Object legend (select lines/polylines, blocks, hatches; pick the TOP-LEFT point)",
+];
+const LEGEND_ACTIONS: [&str; 3] = [
+    "Create the legend",
+    "Save the settings to the JSON file, then create the legend",
+    "Save the settings to the JSON file only",
+];
+const SCALE_SOURCES: [&str; 3] = ["DIMSCALE (drawing setting)", "Annotation scale (current)", "Custom value"];
 const IMPORT_MODES: [&str; 2] = ["Import layers from the LMD file", "Export the drawing's layers to an LMD file"];
 const EXISTING_MODES: [&str; 2] = ["Skip layers that already exist", "Update layers that already exist (colour, linetype, description)"];
 const RENAME_OPS: [&str; 5] = ["Add prefix", "Replace prefix", "Add suffix", "Replace suffix", "Replace string"];
@@ -43,6 +55,7 @@ pub struct LaynameDialog {
     /// The LMD file read in the Import tab: (path, contents).
     lmd: Option<(String, LmdFile)>,
     lmd_note: String,
+    legend_note: String,
     done: bool,
 }
 
@@ -63,11 +76,27 @@ fn choice_of(m: &HashMap<String, DialogValue>, id: &str) -> usize {
     }
 }
 
+fn choice_of_d(m: &HashMap<String, DialogValue>, id: &str, default: usize) -> usize {
+    if m.contains_key(id) { choice_of(m, id) } else { default }
+}
+
 fn bool_of(m: &HashMap<String, DialogValue>, id: &str, default: bool) -> bool {
     match m.get(id) {
         Some(DialogValue::Bool(b)) => *b,
         _ => default,
     }
+}
+
+fn num_of(m: &HashMap<String, DialogValue>, id: &str, default: f64) -> f64 {
+    match m.get(id) {
+        Some(DialogValue::Number(v)) => *v,
+        Some(DialogValue::Text(t)) => t.trim().parse().unwrap_or(default),
+        _ => default,
+    }
+}
+
+fn number(id: &str, label: &str, v: f64) -> DialogControl {
+    DialogControl::Number { id: id.into(), label: label.into(), default: v, min: Some(0.0), max: None, step: Some(0.5) }
 }
 
 fn path_of(m: &HashMap<String, DialogValue>, id: &str) -> Option<String> {
@@ -121,7 +150,7 @@ fn picker(id: &str, label: &str, path: String, save: bool, name: &str, ext: &[&s
 
 impl LaynameDialog {
     pub fn new(tab: Tab, layers: Vec<LayerInfo>, filters: Vec<FilterDef>) -> Self {
-        LaynameDialog { tab, layers, filters, vals: HashMap::new(), lmd: None, lmd_note: String::new(), done: false }
+        LaynameDialog { tab, layers, filters, vals: HashMap::new(), lmd: None, lmd_note: String::new(), legend_note: String::new(), done: false }
     }
 
     // ── building the three tabs ──
@@ -129,12 +158,13 @@ impl LaynameDialog {
     fn tab_bar(&self) -> DialogRow {
         let b = |tab: Tab, id: &str, label: &str| {
             let l = if self.tab == tab { format!("● {label}") } else { label.to_string() };
-            button(id, &l, 170.0)
+            button(id, &l, 140.0)
         };
         DialogRow::new(vec![
             b(Tab::Import, "tab_import", "IMPORT / EXPORT"),
             b(Tab::Rename, "tab_rename", "RENAME"),
             b(Tab::Filter, "tab_filter", "FILTER"),
+            b(Tab::Legend, "tab_legend", "LEGEND"),
         ])
     }
 
@@ -145,6 +175,7 @@ impl LaynameDialog {
             Tab::Import => ("Run", self.import_controls()),
             Tab::Rename => ("Rename layers", self.rename_controls()),
             Tab::Filter => ("Run", self.filter_controls()),
+            Tab::Legend => ("Create legend", self.legend_controls()),
         };
         for c in controls {
             d = d.with_control(c);
@@ -205,6 +236,104 @@ impl LaynameDialog {
             default: bool_of(v, "imp_append", true),
         });
         c
+    }
+
+    fn legend_controls(&self) -> Vec<DialogControl> {
+        let v = &self.vals;
+        let d = Params::default();
+        let n = |id: &str, label: &str, def: f64| number(id, label, num_of(v, id, def));
+        vec![
+            heading("Legend creator"),
+            choice("leg_type", "Legend type", &LEGEND_TYPES, choice_of_d(v, "leg_type", 1)),
+            heading("Saved settings (run later with LN_LEGENDQ, no window)"),
+            choice("leg_action", "When you press the button", &LEGEND_ACTIONS, choice_of(v, "leg_action")),
+            picker("leg_json", "Settings file (JSON)", text_of(v, "leg_json", &crate::legend::current_settings_path()), true, "Legend settings (JSON)", &["json"]),
+            button("leg_load", "Load settings from that file", 220.0),
+            heading("Scale"),
+            choice("leg_scale", "Size everything by", &SCALE_SOURCES, choice_of_d(v, "leg_scale", 1)),
+            n("leg_custom", "Custom scale value", 1.0),
+            info("Every size below is multiplied by the scale (e.g. 50 with scale 100 = 5000 drawing units)."),
+            heading("Sizes (× scale)"),
+            n("leg_len", "Line length", d.line_len),
+            n("leg_pitch", "Line spacing", d.line_pitch),
+            n("leg_block", "Block cell size / spacing", d.block_cell),
+            n("leg_hw", "Hatch swatch width", d.hatch_w),
+            n("leg_hh", "Hatch swatch height", d.hatch_h),
+            n("leg_hpitch", "Hatch spacing", d.hatch_pitch),
+            heading("Text"),
+            n("leg_th", "Text height (× scale)", d.text_height),
+            n("leg_gap", "Gap between sample and text (× scale)", d.text_gap),
+            text("leg_tlayer", "Text layer (blank = current layer)", text_of(v, "leg_tlayer", "")),
+            text("leg_tstyle", "Text style (blank = current style)", text_of(v, "leg_tstyle", "")),
+            DialogControl::Checkbox { id: "leg_desc".into(), label: "Add the layer description: \"Name - Description\"".into(), default: bool_of(v, "leg_desc", true) },
+            heading("Layer legend only"),
+            text("leg_scope", "Only layers named (wildcards * ?)", text_of(v, "leg_scope", "*")),
+            DialogControl::Checkbox { id: "leg_used".into(), label: "Only layers that have objects in the drawing".into(), default: bool_of(v, "leg_used", false) },
+            DialogControl::Checkbox { id: "leg_xref".into(), label: "Include xref layers (name|layer)".into(), default: bool_of(v, "leg_xref", false) },
+            info(&self.legend_note),
+            info("Object legend (the default; annotation scale is the default scale): select the objects first (or after OK), then pick the top-left point. Lines/polylines are listed by layer, then blocks, then hatches; each section alphabetical."),
+        ]
+    }
+
+    /// Put a loaded request's values into the fields.
+    fn apply_request(&mut self, r: &Request) {
+        let ch = |i: usize| DialogValue::Choice { index: i, text: String::new() };
+        let p = &r.params;
+        let set: Vec<(&str, DialogValue)> = vec![
+            ("leg_type", ch(if r.by_layers { 0 } else { 1 })),
+            ("leg_scale", ch(match r.scale_source { ScaleSource::DimScale => 0, ScaleSource::Annotation => 1, ScaleSource::Custom => 2 })),
+            ("leg_custom", DialogValue::Number(r.custom_scale)),
+            ("leg_len", DialogValue::Number(p.line_len)),
+            ("leg_pitch", DialogValue::Number(p.line_pitch)),
+            ("leg_block", DialogValue::Number(p.block_cell)),
+            ("leg_hw", DialogValue::Number(p.hatch_w)),
+            ("leg_hh", DialogValue::Number(p.hatch_h)),
+            ("leg_hpitch", DialogValue::Number(p.hatch_pitch)),
+            ("leg_th", DialogValue::Number(p.text_height)),
+            ("leg_gap", DialogValue::Number(p.text_gap)),
+            ("leg_tlayer", DialogValue::Text(p.text_layer.clone())),
+            ("leg_tstyle", DialogValue::Text(p.text_style.clone())),
+            ("leg_desc", DialogValue::Bool(p.include_desc)),
+            ("leg_scope", DialogValue::Text(r.scope.clone())),
+            ("leg_used", DialogValue::Bool(r.only_used)),
+            ("leg_xref", DialogValue::Bool(r.include_xref)),
+        ];
+        for (k, v) in set {
+            self.vals.insert(k.to_string(), v);
+        }
+        self.legend_note = "Settings loaded.".into();
+    }
+
+    fn legend_request(&self) -> Request {
+        let v = &self.vals;
+        let d = Params::default();
+        let g = |id: &str, def: f64| num_of(v, id, def);
+        Request {
+            by_layers: choice_of_d(v, "leg_type", 1) == 0,
+            scope: text_of(v, "leg_scope", "*"),
+            only_used: bool_of(v, "leg_used", false),
+            include_xref: bool_of(v, "leg_xref", false),
+            scale_source: match choice_of_d(v, "leg_scale", 1) {
+                1 => ScaleSource::Annotation,
+                2 => ScaleSource::Custom,
+                _ => ScaleSource::DimScale,
+            },
+            custom_scale: g("leg_custom", 1.0),
+            params: Params {
+                scale: 1.0,
+                line_len: g("leg_len", d.line_len),
+                line_pitch: g("leg_pitch", d.line_pitch),
+                block_cell: g("leg_block", d.block_cell),
+                hatch_w: g("leg_hw", d.hatch_w),
+                hatch_h: g("leg_hh", d.hatch_h),
+                hatch_pitch: g("leg_hpitch", d.hatch_pitch),
+                text_height: g("leg_th", d.text_height),
+                text_gap: g("leg_gap", d.text_gap),
+                include_desc: bool_of(v, "leg_desc", true),
+                text_layer: text_of(v, "leg_tlayer", "").trim().to_string(),
+                text_style: text_of(v, "leg_tstyle", "").trim().to_string(),
+            },
+        }
     }
 
     fn rename_op(&self) -> Result<RenameOp, String> {
@@ -356,6 +485,20 @@ impl LaynameDialog {
                 Err(e) => Job::Problem(format!("rename: {e}.")),
             },
             Tab::Filter => self.filter_job(),
+            Tab::Legend => {
+                let r = self.legend_request();
+                let action = choice_of(&self.vals, "leg_action");
+                let valid = r.params.validate();
+                if valid.is_ok() && action > 0 {
+                    let path = path_of(&self.vals, "leg_json").unwrap_or_else(crate::legend::current_settings_path);
+                    return Job::LegendSave { req: r, path, run: action == 1 };
+                }
+                match valid {
+                    Ok(()) if r.scale_source == ScaleSource::Custom && !(r.custom_scale > 0.0) => Job::Problem("legend: the custom scale must be greater than 0.".into()),
+                    Ok(()) => Job::Legend(r),
+                    Err(e) => Job::Problem(format!("legend: {e}.")),
+                }
+            }
         }
     }
 
@@ -444,10 +587,11 @@ impl InteractiveCommand for LaynameDialog {
         }
         let (id, action) = (event.control_id.as_str(), event.action.as_str());
         match (id, action) {
-            ("tab_import", "click") | ("tab_rename", "click") | ("tab_filter", "click") => {
+            ("tab_import", "click") | ("tab_rename", "click") | ("tab_filter", "click") | ("tab_legend", "click") => {
                 self.tab = match id {
                     "tab_import" => Tab::Import,
                     "tab_rename" => Tab::Rename,
+                    "tab_legend" => Tab::Legend,
                     _ => Tab::Filter,
                 };
                 self.replace()
@@ -458,6 +602,17 @@ impl InteractiveCommand for LaynameDialog {
                         self.lmd = None;
                         self.lmd_note = e;
                     }
+                }
+                self.replace()
+            }
+            ("leg_load", "click") => {
+                let path = path_of(&self.vals, "leg_json").unwrap_or_else(crate::legend::current_settings_path);
+                match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| crate::legend::from_json(&t)) {
+                    Ok(r) => {
+                        self.apply_request(&r);
+                        crate::legend::remember_settings_path(&path);
+                    }
+                    Err(e) => self.legend_note = format!("Could not load \"{path}\": {e}"),
                 }
                 self.replace()
             }
@@ -617,6 +772,52 @@ mod tests {
 
     fn lmd_text() -> &'static str {
         "[A],,,\nL1 ,7, Continuous , x\n[B],,,\nL2 ,1, CENTER , <null>\n"
+    }
+
+    #[test]
+    fn legend_tab_defaults_and_job() {
+        let mut d = LaynameDialog::new(Tab::Legend, vec![], vec![]);
+        assert!(ids(&d.build()).contains(&"leg_len".to_string()));
+        d.on_dialog_response(DialogResponse::Submitted(HashMap::from([
+            ("leg_type".to_string(), DialogValue::Choice { index: 1, text: String::new() }),
+            ("leg_scale".to_string(), DialogValue::Choice { index: 1, text: String::new() }),
+            ("leg_len".to_string(), DialogValue::Number(40.0)),
+        ])));
+        match take_job_for_test() {
+            Some(Job::Legend(r)) => {
+                assert!(!r.by_layers);
+                assert_eq!(r.scale_source, ScaleSource::Annotation);
+                assert_eq!((r.params.line_len, r.params.line_pitch, r.params.hatch_w), (40.0, 7.5, 25.0));
+            }
+            _ => panic!("expected Legend"),
+        }
+        let mut def = LaynameDialog::new(Tab::Legend, vec![], vec![]);
+        def.on_dialog_response(DialogResponse::Submitted(HashMap::new()));
+        assert!(matches!(take_job_for_test(), Some(Job::Legend(r)) if !r.by_layers && r.scale_source == ScaleSource::Annotation));
+        let mut z = LaynameDialog::new(Tab::Legend, vec![], vec![]);
+        z.on_dialog_response(DialogResponse::Submitted(HashMap::from([("leg_len".to_string(), DialogValue::Number(0.0))])));
+        assert!(matches!(take_job_for_test(), Some(Job::Problem(_))));
+    }
+
+    #[test]
+    fn legend_settings_save_and_load() {
+        let dir = std::env::temp_dir().join("layname_legend_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("l.json").to_string_lossy().to_string();
+        let mut d = LaynameDialog::new(Tab::Legend, vec![], vec![]);
+        d.on_dialog_response(DialogResponse::Submitted(HashMap::from([
+            ("leg_action".to_string(), DialogValue::Choice { index: 2, text: String::new() }),
+            ("leg_json".to_string(), DialogValue::FilePath(path.clone())),
+            ("leg_th".to_string(), DialogValue::Number(4.0)),
+        ])));
+        let Some(Job::LegendSave { req, path: p, run }) = take_job_for_test() else { panic!("expected LegendSave") };
+        assert!(!run && p == path && req.params.text_height == 4.0);
+        std::fs::write(&p, crate::legend::to_json(&req)).unwrap();
+
+        let mut e = LaynameDialog::new(Tab::Legend, vec![], vec![]);
+        let DialogActionResponse::ReplaceDialog(_) = e.on_dialog_action(ev("leg_load", "click", &[("leg_json", DialogValue::FilePath(path))])) else { panic!() };
+        e.on_dialog_response(DialogResponse::Submitted(HashMap::new()));
+        assert!(matches!(take_job_for_test(), Some(Job::Legend(r)) if r.params.text_height == 4.0));
     }
 
     #[test]

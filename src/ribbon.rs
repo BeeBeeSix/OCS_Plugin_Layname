@@ -32,6 +32,8 @@ impl CadModule for LaynameModule {
                         cmd("LN_IMPORT", "Import / Export", include_bytes!("../icons/import.svg")),
                         cmd("LN_RENAME", "Rename", include_bytes!("../icons/rename.svg")),
                         cmd("LN_FILTER", "Filters", include_bytes!("../icons/filter.svg")),
+                        cmd("LN_LEGEND", "Legend", include_bytes!("../icons/legend.svg")),
+                        cmd("LN_LEGENDQ", "Legend (saved)", include_bytes!("../icons/legend_quick.svg")),
                     ],
                 },
                 RibbonGroup {

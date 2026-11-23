@@ -14,6 +14,7 @@ use ocs_plugin_api::host::{HostApi, LayerConfig, TableOperation};
 use crate::dialog::{LaynameDialog, Tab};
 use crate::filters::{self, FilterDef};
 use crate::host::{LayerHost, LayerInfo};
+use crate::legend::{self, Layout, Request, ScaleSource};
 use crate::lmd::{self, Existing, LmdFile, LmdLayer};
 use crate::rename::{self, RenameOp};
 
@@ -33,6 +34,11 @@ pub enum Job {
     FilterCreate(Vec<FilterDef>),
     FilterExport(String),
     FilterImport(String),
+    Legend(Request),
+    /// Save the legend settings to JSON; `run` = also create the legend now.
+    LegendSave { req: Request, path: String, run: bool },
+    /// Object legend: the selection was made (handles) — pick the point next.
+    LegendSelected(Request, Vec<codec::Handle>),
     /// A problem found while the dialog closed.
     Problem(String),
 }
@@ -62,6 +68,8 @@ pub fn handle(host: &mut dyn HostApi, cmd: &str) -> bool {
         "LN_IMPORT" | "LN_LAYNAME" => open(host, Tab::Import),
         "LN_RENAME" => open(host, Tab::Rename),
         "LN_FILTER" => open(host, Tab::Filter),
+        "LN_LEGEND" => open(host, Tab::Legend),
+        "LN_LEGENDQ" | "LN_LEGEND_QUICK" => legend_quick(host, cmd),
         "LN_APPLY" => {
             if let Some(job) = take_job() {
                 apply(host, job);
@@ -78,7 +86,9 @@ fn help(host: &mut dyn HostApi) {
         "  LN_IMPORT  import / export LMD layer maps (groups in [brackets])",
         "  LN_RENAME  bulk rename: prefix add/replace, suffix add/replace, string replace",
         "  LN_FILTER  create layer filters quickly; export / import them as CSV",
-        "All three open the same window; the buttons at its top switch between the tabs.",
+        "  LN_LEGEND  legend creator: layer legend or object legend (lines, blocks, hatches)",
+        "  LN_LEGENDQ legend from the saved JSON settings, no window (LN_LEGENDQ file.json = another file)",
+        "The window commands open the same window; the buttons at its top switch between the tabs.",
     ] {
         host.push_output(line);
     }
@@ -266,6 +276,30 @@ fn apply(host: &mut dyn HostApi, job: Job) {
             }
         }
 
+        Job::Legend(req) => start_legend(host, req),
+        Job::LegendSave { req, path, run } => {
+            let wrote = Path::new(&path)
+                .parent()
+                .filter(|d| !d.as_os_str().is_empty())
+                .map(std::fs::create_dir_all)
+                .unwrap_or(Ok(()))
+                .and_then(|_| std::fs::write(&path, legend::to_json(&req)));
+            match wrote {
+                Ok(()) => {
+                    legend::remember_settings_path(&path);
+                    host.push_info(&format!("LN_LEGEND: settings saved to \"{path}\" (LN_LEGENDQ runs the legend with them)."));
+                    if run {
+                        start_legend(host, req);
+                    }
+                }
+                Err(e) => host.push_error(&format!("LN_LEGEND: cannot write \"{path}\": {e}")),
+            }
+        }
+        Job::LegendSelected(req, handles) => {
+            let items = legend::items_from_selection(host.document(), &handles, req.params.include_desc);
+            begin_pick(host, req, items);
+        }
+
         Job::FilterCreate(defs) => create_filters(host, defs, Vec::new()),
 
         Job::FilterExport(path) => {
@@ -322,5 +356,156 @@ fn create_filters(host: &mut dyn HostApi, defs: Vec<FilterDef>, mut warnings: Ve
     }
     if warnings.len() > 15 {
         host.push_output(&format!("  … and {} more", warnings.len() - 15));
+    }
+}
+
+// ───────────────────────── legend ─────────────────────────
+
+fn resolve_scale(host: &dyn HostApi, req: &Request) -> Result<f64, String> {
+    use ocs_plugin_api::host::HostSettingValue as V;
+    let s = match req.scale_source {
+        ScaleSource::Custom => req.custom_scale,
+        ScaleSource::DimScale => match host.system_variable("DIMSCALE") {
+            Some(V::Number(v)) if v > 0.0 => v,
+            Some(V::Text(t)) => t.trim().parse().ok().filter(|v: &f64| *v > 0.0).unwrap_or(1.0),
+            _ => 1.0, // DIMSCALE 0 / unreadable: paper-space style, 1
+        },
+        ScaleSource::Annotation => {
+            // The live settings follow the status-bar scale; the saved header only the last save.
+            let name = match host.system_variable("CANNOSCALE") {
+                Some(V::Text(t)) => Some(t),
+                _ => None,
+            };
+            let value = match host.system_variable("CANNOSCALEVALUE") {
+                Some(V::Number(v)) => Some(v),
+                Some(V::Text(t)) => t.trim().parse().ok(),
+                _ => None,
+            };
+            let live = name.is_some() || value.is_some();
+            let (n, m) = legend::annotation_info(host.document(), name.as_deref(), value)
+                .ok_or("the current annotation scale could not be read (use DIMSCALE or a custom value)")?;
+            note_scale(&n, m, live);
+            m
+        }
+    };
+    if s.is_finite() && s > 0.0 { Ok(s) } else { Err("the scale is not a positive number".into()) }
+}
+
+static SCALE_NOTE: Mutex<Option<String>> = Mutex::new(None);
+
+fn note_scale(name: &str, mult: f64, live: bool) {
+    let src = if live { "from the host" } else { "from the drawing's saved header" };
+    let warn = if name.eq_ignore_ascii_case("1:1") { " — if the status bar shows another scale, pick \"Custom value\"" } else { "" };
+    *SCALE_NOTE.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("annotation scale {name} (× {mult}) read {src}{warn}"));
+}
+
+fn start_legend(host: &mut dyn HostApi, mut req: Request) {
+    match resolve_scale(host, &req) {
+        Ok(s) => req.params.scale = s,
+        Err(e) => return host.push_error(&format!("LN_LEGEND: {e}")),
+    }
+    if req.params.text_layer.is_empty() {
+        // Blank = current layer; the Text constructor already uses the host's current layer.
+    } else if !host.document().layers.iter().any(|l| l.name.eq_ignore_ascii_case(&req.params.text_layer)) {
+        let name = req.params.text_layer.clone();
+        host.add_layer(LayerConfig { name, ..Default::default() });
+    }
+    if !req.by_layers && !host.document().layers.iter().any(|l| l.name.eq_ignore_ascii_case(legend::FRAME_LAYER)) {
+        host.add_layer(LayerConfig { name: legend::FRAME_LAYER.to_string(), ..Default::default() });
+    }
+    if req.by_layers {
+        let items = legend::items_from_layers(host.document(), &req);
+        return begin_pick(host, req, items);
+    }
+    let pre = host.selection();
+    if pre.is_empty() {
+        host.push_info("LN_LEGEND: select the lines, polylines, blocks and hatches for the legend, then press Enter.");
+        host.start_interactive(Box::new(SelectPicker { req, handles: Vec::new() }));
+    } else {
+        let items = legend::items_from_selection(host.document(), &pre, req.params.include_desc);
+        begin_pick(host, req, items);
+    }
+}
+
+/// `LN_LEGENDQ [file.json]`: the legend from saved settings, no window.
+fn legend_quick(host: &mut dyn HostApi, cmd: &str) {
+    let arg = cmd.trim().split_once(char::is_whitespace).map(|(_, r)| r.trim().trim_matches('"').to_string()).filter(|a| !a.is_empty());
+    let path = arg.unwrap_or_else(legend::current_settings_path);
+    let req = match read_text(&path).and_then(|t| legend::from_json(&t)) {
+        Ok(r) => r,
+        Err(e) => {
+            return host.push_error(&format!(
+                "LN_LEGENDQ: {e}. Save settings first in the LEGEND tab (LN_LEGEND) — settings file: \"{path}\"."
+            ))
+        }
+    };
+    host.push_info(&format!("LN_LEGENDQ: settings from \"{path}\"."));
+    start_legend(host, req);
+}
+
+fn begin_pick(host: &mut dyn HostApi, req: Request, items: Vec<legend::Item>) {
+    if items.is_empty() {
+        return host.push_error("LN_LEGEND: nothing to list (no matching layers, or no lines/polylines, blocks or hatches selected).");
+    }
+    let layout = if req.by_layers { Layout::LowerLeft } else { Layout::TopLeft };
+    host.push_info(&format!(
+        "LN_LEGEND: {} entr{} at scale {}.",
+        items.len(), if items.len() == 1 { "y" } else { "ies" }, req.params.scale
+    ));
+    if let Some(n) = SCALE_NOTE.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        host.push_output(&format!("  {n}"));
+    }
+    host.start_interactive(Box::new(PointPicker { items, params: req.params, layout }));
+}
+
+/// Gathers the selection; Enter hands the handles back through `LN_APPLY`.
+struct SelectPicker {
+    req: Request,
+    handles: Vec<codec::Handle>,
+}
+
+impl ocs_plugin_api::host::InteractiveCommand for SelectPicker {
+    fn prompt(&self) -> String {
+        "Legend: select lines, polylines, blocks, hatches (Enter to finish)".into()
+    }
+    fn on_point(&mut self, _pt: [f64; 3]) -> ocs_plugin_api::host::CommandStep {
+        ocs_plugin_api::host::CommandStep::NeedPoint
+    }
+    fn is_selection_gathering(&self) -> bool {
+        true
+    }
+    fn accepts_drag_selection(&self) -> bool {
+        true
+    }
+    fn on_selection_complete(&mut self, handles: Vec<codec::Handle>) -> ocs_plugin_api::host::CommandStep {
+        self.handles = handles;
+        ocs_plugin_api::host::CommandStep::NeedPoint
+    }
+    fn on_enter(&mut self) -> ocs_plugin_api::host::CommandStep {
+        use ocs_plugin_api::host::CommandStep;
+        if self.handles.is_empty() {
+            return CommandStep::Cancel;
+        }
+        set_job(Job::LegendSelected(self.req.clone(), std::mem::take(&mut self.handles)));
+        CommandStep::Dispatch("LN_APPLY".into())
+    }
+}
+
+/// Waits for the legend's anchor point, then commits the whole legend.
+struct PointPicker {
+    items: Vec<legend::Item>,
+    params: legend::Params,
+    layout: Layout,
+}
+
+impl ocs_plugin_api::host::InteractiveCommand for PointPicker {
+    fn prompt(&self) -> String {
+        match self.layout {
+            Layout::LowerLeft => "Legend: pick the LOWER-LEFT point".into(),
+            Layout::TopLeft => "Legend: pick the TOP-LEFT point".into(),
+        }
+    }
+    fn on_point(&mut self, pt: [f64; 3]) -> ocs_plugin_api::host::CommandStep {
+        ocs_plugin_api::host::CommandStep::CommitManyAndEnd(legend::build(&self.items, &self.params, self.layout, pt))
     }
 }

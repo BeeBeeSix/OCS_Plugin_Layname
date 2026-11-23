@@ -16,6 +16,7 @@ pub mod csvutil;
 pub mod dialog;
 pub mod filters;
 pub mod host;
+pub mod legend;
 pub mod lmd;
 pub mod rename;
 mod ribbon;
