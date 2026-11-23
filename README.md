@@ -1,7 +1,8 @@
-# Layer Names (`opencad.layname`)
+# Layer Names
+2026.47 Compatible
 
 External add-on for [Open CAD Studio](https://github.com/HakanSeven12/OpenCADStudio): layer
-housekeeping in one window with four tabs (plus a legend creator). Ribbon tab **Layer Names**; commands start with `LN_`.
+housekeeping in one window with four tabs). Ribbon tab **Layer Names**; commands start with `LN_`.
 
 | Command | Opens |
 |---|---|
@@ -93,5 +94,5 @@ unless you name a layer (created if missing) or style.
 
 ## Build
 
-`cargo build --release` (toolchain pinned in `rust-toolchain.toml`, API pinned to the v2026.46
+`cargo build --release` (toolchain pinned in `rust-toolchain.toml`, API pinned to the v2026.47
 release commit like Raster Tools). `cargo test` runs the unit tests.
